@@ -8,44 +8,71 @@ import matplotlib
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-from matplotlib.patches import FancyArrowPatch, FancyBboxPatch, Rectangle
-from matplotlib.ticker import FuncFormatter
+from matplotlib.patches import Rectangle
+from matplotlib.ticker import FuncFormatter, MultipleLocator
 
 SEED = 2026
 BRIGADES = 6
+PER_BRIGADE = 3
+R_MIN, R_MAX = 4.0, 38.0
+Q = 10
+CONTROL = (45, 65)
 
 
-def brigade_radii(j):
-    return [2 * j + 2, 2 * j + 14, 2 * j + 26]
+def draw_radii(seed=SEED):
+    rng = random.Random(seed)
+    return [round(rng.uniform(R_MIN, R_MAX) * Q) for _ in range(BRIGADES * PER_BRIGADE)]
 
 
-def pixel_counts(R, closed=True):
+def fl(m, k):
+    v = m * m - Q * Q * k * k
+    return math.isqrt(v) // Q if v >= 0 else -1
+
+
+def exact_quarter(m):
+    r = m // Q
+    inn = sum(fl(m, k) for k in range(1, r + 1))
+    out = sum(fl(m, k) + 1 for k in range(0, r + 1))
+    return inn, out
+
+
+def classify(m, i, j):
+    far = Q * Q * ((i + 1) ** 2 + (j + 1) ** 2)
+    near = Q * Q * (i * i + j * j)
+    mm = m * m
+    if far <= mm:
+        return "inner"
+    if near < mm:
+        return "boundary"
+    if near == mm:
+        return "touch"
+    return "outside"
+
+
+def program_quarter(m, variant="correct"):
+    n = m // Q + 2
     inn = out = 0
-    n = R + 1
-    for i in range(-n, n):
-        for j in range(-n, n):
-            far = max(i * i, (i + 1) ** 2) + max(j * j, (j + 1) ** 2)
-            nx = 0 if i <= 0 <= i + 1 else min(abs(i), abs(i + 1))
-            ny = 0 if j <= 0 <= j + 1 else min(abs(j), abs(j + 1))
-            near = nx * nx + ny * ny
-            if far <= R * R:
+    cols = range(m // Q) if variant == "offbyone" else range(n)
+    for i in range(n):
+        for j in range(n):
+            if classify(m, i, j) == "inner":
                 inn += 1
-            if (near <= R * R) if closed else (near < R * R):
+    for i in cols:
+        for j in range(n):
+            c = classify(m, i, j)
+            if c in ("inner", "boundary") or (c == "touch" and variant != "open"):
                 out += 1
     return inn, out
 
 
-def center_counts(R):
+def centers_full(m):
+    n = m // Q + 1
     c = 0
-    for i in range(-R - 1, R + 1):
-        for j in range(-R - 1, R + 1):
-            if (i + 0.5) ** 2 + (j + 0.5) ** 2 <= R * R:
+    for i in range(-n, n):
+        for j in range(-n, n):
+            if Q * Q * ((2 * i + 1) ** 2 + (2 * j + 1) ** 2) <= 4 * m * m:
                 c += 1
     return c
-
-
-def lattice_points(R):
-    return sum(2 * math.isqrt(R * R - a * a) + 1 for a in range(-R, R + 1))
 
 
 def fit(xs, ys, ds):
@@ -60,7 +87,7 @@ def monte_carlo(radii, seed):
     rng = random.Random(seed)
     xs, ys, ds = [], [], []
     for R in radii:
-        N = 4 * R * R
+        N = round(4 * R * R)
         hits = 0
         for _ in range(N):
             x = rng.uniform(-R, R)
@@ -91,78 +118,45 @@ def setup_fonts():
 
 
 def save(fig, out, name):
-    fig.savefig(out / f"{name}.png", dpi=300, bbox_inches="tight")
-    fig.savefig(out / f"{name}.tif", dpi=600, bbox_inches="tight", pil_kwargs={"compression": "tiff_lzw"})
+    fig.savefig(out / f"{name}.png", dpi=300, bbox_inches="tight", facecolor="white")
+    fig.savefig(out / f"{name}.tif", dpi=600, bbox_inches="tight", facecolor="white",
+                pil_kwargs={"compression": "tiff_lzw"})
     plt.close(fig)
 
 
-def figure_pixels(out, R=5):
-    fig, ax = plt.subplots(figsize=(2.6, 2.6))
-    n = R + 1
-    for i in range(-n, n):
-        for j in range(-n, n):
-            far = max(i * i, (i + 1) ** 2) + max(j * j, (j + 1) ** 2)
-            nx = 0 if i <= 0 <= i + 1 else min(abs(i), abs(i + 1))
-            ny = 0 if j <= 0 <= j + 1 else min(abs(j), abs(j + 1))
-            near = nx * nx + ny * ny
-            if far <= R * R:
+def draw_quarter(ax, m, n_cells):
+    R = m / Q
+    for i in range(n_cells):
+        for j in range(n_cells):
+            c = classify(m, i, j)
+            if c == "inner":
                 ax.add_patch(Rectangle((i, j), 1, 1, facecolor="0.45", edgecolor="0.3", lw=0.4))
-            elif near < R * R:
+            elif c == "boundary":
                 ax.add_patch(Rectangle((i, j), 1, 1, facecolor="0.82", edgecolor="0.3", lw=0.4))
-            elif near == R * R:
+            elif c == "touch":
                 ax.add_patch(Rectangle((i, j), 1, 1, facecolor="white", edgecolor="0.3", lw=0.4, hatch="////"))
             else:
                 ax.add_patch(Rectangle((i, j), 1, 1, facecolor="white", edgecolor="0.75", lw=0.3))
-    t = [2 * math.pi * s / 400 for s in range(401)]
+    t = [math.pi / 2 * s / 200 for s in range(201)]
     ax.plot([R * math.cos(a) for a in t], [R * math.sin(a) for a in t], color="black", lw=1.4)
-    ax.plot([0], [0], "ko", ms=3)
-    ax.set_xlim(-n, n)
-    ax.set_ylim(-n, n)
+    ax.plot([0], [0], "ko", ms=2.5)
+    ax.set_xlim(-0.15, n_cells + 0.15)
+    ax.set_ylim(-0.15, n_cells + 0.15)
     ax.set_aspect("equal")
     ax.axis("off")
+
+
+def figure_pixels(out, panels):
+    fig, axes = plt.subplots(1, len(panels), figsize=(5.8, 2.15), gridspec_kw={"wspace": 0.12})
+    n_cells = max(m // Q + 2 for m, _ in panels)
+    for ax, (m, letter) in zip(axes, panels):
+        draw_quarter(ax, m, n_cells)
+        ax.text(0.5, -0.1, f"{letter}", transform=ax.transAxes, ha="center", va="top", fontsize=12)
     save(fig, out, "Рисунок_1")
 
 
-def figure_model(out):
-    fig, ax = plt.subplots(figsize=(6.7, 3.4))
-    ax.set_xlim(0, 100)
-    ax.set_ylim(0, 51)
-    ax.axis("off")
-    w, h = 29, 20.5
-    xs = (0.8, 35.5, 70.2)
-    top, bottom = 29.3, 1.0
-    boxes = [
-        (xs[0], top, "1. Формализация", "гипотезы $H_0$ и $H_1$,\nправило решения,\nручной подсчёт", "(формулирование)", "white", "-"),
-        (xs[1], top, "2. Постановка", "технического\nзадания, протокол\nитераций", "(применение)", "white", "-"),
-        (xs[2], top, "ИИ-ассистент", "пишет\nи исправляет код\nпо заданию", "(делегируется)", "0.85", "--"),
-        (xs[2], bottom, "3. Верификация", "контрольные точки,\nтождество (3)", "(оценивание)", "white", "-"),
-        (xs[1], bottom, "4. Интерпретация", "оценка π и δπ,\nзаключение по $H_0$", "(интерпретирование)", "white", "-"),
-        (xs[0], bottom, "5. Рефлексия", "что сделал я,\nчто сделал ИИ,\nгде было трудно", "(метапознание)", "0.94", "-"),
-    ]
-    for x, y, title, body, tag, fc, ls in boxes:
-        ax.add_patch(FancyBboxPatch((x, y), w, h, boxstyle="round,pad=0.4,rounding_size=1.5",
-                                    facecolor=fc, edgecolor="black", lw=0.9, ls=ls))
-        ax.text(x + w / 2, y + h - 1.4, title, ha="center", va="top", fontsize=12)
-        ax.text(x + w / 2, y + h / 2 + 0.2, body, ha="center", va="center", fontsize=12, linespacing=1.05)
-        ax.text(x + w / 2, y + 1.2, tag, ha="center", va="bottom", fontsize=12, color="0.3")
-
-    def arrow(p, q, rad=0.0):
-        ax.add_patch(FancyArrowPatch(p, q, connectionstyle=f"arc3,rad={rad}", arrowstyle="-|>",
-                                     mutation_scale=12, lw=0.9, color="black"))
-
-    mid_top, mid_bottom = top + h / 2, bottom + h / 2
-    arrow((xs[0] + w + 0.6, mid_top), (xs[1] - 0.6, mid_top))
-    arrow((xs[1] + w + 0.6, mid_top), (xs[2] - 0.6, mid_top))
-    arrow((xs[2] + w / 2, top - 0.6), (xs[2] + w / 2, bottom + h + 0.6))
-    arrow((xs[2] - 0.6, mid_bottom), (xs[1] + w + 0.6, mid_bottom))
-    arrow((xs[1] - 0.6, mid_bottom), (xs[0] + w + 0.6, mid_bottom))
-    arrow((xs[2] + 3, bottom + h + 0.6), (xs[1] + w - 3, top - 0.6), rad=-0.2)
-    ax.text(xs[1] + 2, (top + bottom + h) / 2, "расхождение, новая итерация", ha="center", va="center", fontsize=12)
-    save(fig, out, "Схема_компонентов")
-
-
 def figure_results(out, rows, k, cum_pix, cum_mc):
-    fig, (ax, bx) = plt.subplots(1, 2, figsize=(6.7, 2.8), gridspec_kw={"wspace": 0.42})
+    fig, (ax, bx) = plt.subplots(1, 2, figsize=(6.0, 2.15), gridspec_kw={"wspace": 0.42})
     ax.errorbar([r["R"] ** 2 for r in rows], [r["S_mid"] for r in rows], yerr=[r["dS"] for r in rows],
                 fmt="o", ms=4, mfc="white", mec="black", ecolor="0.4", elinewidth=0.7, capsize=2)
     xmax = 1500
@@ -173,7 +167,7 @@ def figure_results(out, rows, k, cum_pix, cum_mc):
     ax.set_xticks([0, 500, 1000, 1500])
     ax.set_xlabel("$R$²")
     ax.set_ylabel(r"$\langle S\rangle$")
-    ax.text(0.5, -0.33, "а", transform=ax.transAxes, ha="center", fontsize=12)
+    ax.text(0.5, -0.45, "а", transform=ax.transAxes, ha="center", fontsize=12)
     xs = list(range(1, BRIGADES + 1))
     bx.axhline(math.pi, color="black", lw=0.9)
     bx.axhline(3.0, color="black", lw=0.9, ls="--")
@@ -183,14 +177,17 @@ def figure_results(out, rows, k, cum_pix, cum_mc):
                 color="black", mfc="black", elinewidth=0.9, capsize=2.5, label="пиксели")
     bx.errorbar([x + 0.1 for x in xs], [c[0] for c in cum_mc], yerr=[2 * c[1] for c in cum_mc], fmt="o", ms=4,
                 color="0.35", mfc="white", elinewidth=0.9, capsize=2.5, label="Монте-Карло")
+    lo = min(min(c[0] - 2 * c[1] for c in cum_pix), min(c[0] - 2 * c[1] for c in cum_mc), 3.0)
+    hi = max(max(c[0] + 2 * c[1] for c in cum_pix), max(c[0] + 2 * c[1] for c in cum_mc))
     bx.set_xlim(0.5, 7.2)
-    bx.set_ylim(2.80, 3.45)
+    bx.set_ylim(math.floor((lo - 0.06) * 10) / 10 - 0.2, math.ceil((hi + 0.04) * 10) / 10)
     bx.set_xticks(xs)
     bx.set_xlabel("число бригад")
     bx.set_ylabel("$k$")
+    bx.yaxis.set_major_locator(MultipleLocator(0.2))
     bx.yaxis.set_major_formatter(FuncFormatter(lambda v, p: comma(v, 1)))
     bx.legend(fontsize=12, frameon=False, loc="lower right", handletextpad=0.3, borderaxespad=0.2)
-    bx.text(0.5, -0.33, "б", transform=bx.transAxes, ha="center", fontsize=12)
+    bx.text(0.5, -0.45, "б", transform=bx.transAxes, ha="center", fontsize=12)
     save(fig, out, "Рисунок_2")
 
 
@@ -199,60 +196,99 @@ def main():
     out.mkdir(parents=True, exist_ok=True)
     setup_fonts()
 
+    for m in CONTROL + (50,):
+        inn, o = exact_quarter(m)
+        print("control R =", m / Q, "quarter Sinn", inn, "Sout", o, "full", 4 * inn, 4 * o,
+              "<S>", 2 * (inn + o), "dS", 2 * (o - inn), "piR2", round(math.pi * (m / Q) ** 2, 2))
+
+    ms = draw_radii()
     rows = []
-    for j in range(1, BRIGADES + 1):
-        for R in brigade_radii(j):
-            inn, o = pixel_counts(R, True)
-            _, o_open = pixel_counts(R, False)
-            S = (inn + o) / 2
-            rows.append({
-                "brigade": j, "R": R, "S_inn": inn, "S_out": o, "S_out_open": o_open,
-                "S_mid": S, "dS": (o - inn) / 2, "dev": S - math.pi * R * R,
-                "S_centers": center_counts(R), "N_lattice": lattice_points(R),
-            })
+    for idx, m in enumerate(ms):
+        R = m / Q
+        qi, qo = exact_quarter(m)
+        pi_, po = program_quarter(m)
+        oi, oo = program_quarter(m, "open")
+        bi, bo = program_quarter(m, "offbyone")
+        inn, o = 4 * qi, 4 * qo
+        rows.append({
+            "brigade": idx // PER_BRIGADE + 1, "m": m, "R": R, "S_inn": inn, "S_out": o,
+            "S_mid": (inn + o) / 2, "dS": (o - inn) / 2, "dev": (inn + o) / 2 - math.pi * R * R,
+            "prog_ok": (pi_, po) == (qi, qo), "open_ok": (oi, oo) == (qi, qo), "obo_ok": (bi, bo) == (qi, qo),
+            "S_out_obo": 4 * bo, "S_centers": centers_full(m),
+        })
 
     with open(out / "данные_модельного_эксперимента.csv", "w", newline="", encoding="utf-8-sig") as f:
         w = csv.writer(f, delimiter=";")
-        w.writerow(["бригада", "R", "S_inn", "S_out", "<S>", "dS", "<S>-piR2", "S_out (открытое соглашение)", "S по центрам пикселей", "N(R) точек решётки"])
-        for r in sorted(rows, key=lambda r: r["R"]):
-            w.writerow([r["brigade"], r["R"], r["S_inn"], r["S_out"], comma(r["S_mid"], 1), comma(r["dS"], 1),
-                        comma(r["dev"], 2), r["S_out_open"], r["S_centers"], r["N_lattice"]])
+        w.writerow(["бригада", "R", "S_inn", "S_out", "<S>", "dS", "<S>-piR2", "S_out (ошибка в цикле)",
+                    "S по центрам пикселей"])
+        for r in rows:
+            w.writerow([r["brigade"], comma(r["R"], 1), r["S_inn"], r["S_out"], comma(r["S_mid"], 1),
+                        comma(r["dS"], 1), comma(r["dev"], 2), r["S_out_obo"], r["S_centers"]])
 
-    print("identity S_out-S_inn=8R+4:", all(r["S_out"] - r["S_inn"] == 8 * r["R"] + 4 for r in rows))
-    print("identity <S>=N(R)+1:", all(r["S_mid"] == r["N_lattice"] + 1 for r in rows))
-    print("min ratio dS/|dev|:", round(min(r["dS"] / abs(r["dev"]) for r in rows), 2))
+    print("radii by brigade:", [[comma(r["R"], 1) for r in rows if r["brigade"] == j] for j in range(1, BRIGADES + 1)])
+    print("sorted radii:", sorted(r["R"] for r in rows))
+    print("integer radii among them:", [r["R"] for r in rows if r["m"] % Q == 0])
+    print("correct program == exact sums:", all(r["prog_ok"] for r in rows))
+    print("open program == exact sums on random radii:", all(r["open_ok"] for r in rows))
+    print("off-by-one program == exact sums:", sum(r["obo_ok"] for r in rows), "of", len(rows))
+    print("identity S_out-S_inn = 8[R]+4:", all(r["S_out"] - r["S_inn"] == 8 * (r["m"] // Q) + 4 for r in rows))
     print("dev range:", round(min(r["dev"] for r in rows), 2), round(max(r["dev"] for r in rows), 2))
+    print("dS range:", min(r["dS"] for r in rows), max(r["dS"] for r in rows))
+    print("max |dev|/dS:", round(max(abs(r["dev"]) / r["dS"] for r in rows), 3))
 
-    mc_x, mc_y, mc_d = monte_carlo([R for j in range(1, BRIGADES + 1) for R in brigade_radii(j)], SEED)
+    for v in ("correct", "open", "offbyone"):
+        print(v, "R=5 quarter:", program_quarter(50, v), "exact", exact_quarter(50))
+    print("open R=sqrt5 test needs node: R^2=5 nodes (1,2),(2,1)")
+
+    radii = [r["R"] for r in rows]
+    mc_x, mc_y, mc_d = monte_carlo(radii, SEED)
     cum_pix, cum_mc = [], []
-    print("brigades circles k dk dk_max |k-pi| reject3")
+    print("brigades circles k dk dk_max |k-pi| reject3 | MC k dk")
     for j in range(1, BRIGADES + 1):
         sel = [r for r in rows if r["brigade"] <= j]
         k, dk, dkm = fit([r["R"] ** 2 for r in sel], [r["S_mid"] for r in sel], [r["dS"] for r in sel])
         cum_pix.append((k, dk))
-        m = 3 * j
+        m = PER_BRIGADE * j
         km, dkm_mc, _ = fit(mc_x[:m], mc_y[:m], mc_d[:m])
         cum_mc.append((km, dkm_mc))
-        print(j, 3 * j, round(k, 4), round(dk, 4), round(dkm, 4), round(abs(k - math.pi), 4), abs(k - 3) > 2 * dk,
+        print(j, m, round(k, 4), round(dk, 4), round(dkm, 4), round(abs(k - math.pi), 4), abs(k - 3) > 2 * dk,
               "| MC", round(km, 4), round(dkm_mc, 4))
-    k_all, dk_all, _ = fit([r["R"] ** 2 for r in rows], [r["S_mid"] for r in rows], [r["dS"] for r in rows])
-    for name, v in (("22/7", 22 / 7), ("(16/9)^2", (16 / 9) ** 2), ("25/8", 25 / 8)):
-        print(name, "rejected:", abs(k_all - v) > 2 * dk_all)
-    ko, dko, _ = fit([r["R"] ** 2 for r in rows], [(r["S_inn"] + r["S_out_open"]) / 2 for r in rows],
-                     [(r["S_out_open"] - r["S_inn"]) / 2 for r in rows])
-    print("open convention:", round(ko, 4), round(dko, 4))
-    sxx = sum(r["R"] ** 4 for r in rows)
-    print("centers convention:", round(sum(r["R"] ** 2 * r["S_centers"] for r in rows) / sxx, 4))
-    runs = [fit(*monte_carlo([R for j in range(1, BRIGADES + 1) for R in brigade_radii(j)], s))[0] for s in range(1, 201)]
+    xs = [r["R"] ** 2 for r in rows]
+    k_all, dk_all, dkm_all = fit(xs, [r["S_mid"] for r in rows], [r["dS"] for r in rows])
+    print("all: k", round(k_all, 4), "dk", round(dk_all, 4), "dk_max", round(dkm_all, 4), "2dk", round(2 * dk_all, 4))
+    for name, v in (("3", 3.0), ("22/7", 22 / 7), ("(16/9)^2", (16 / 9) ** 2), ("25/8", 25 / 8), ("3.16", 3.16)):
+        print(name, "rejected:", abs(k_all - v) > 2 * dk_all, "dist", round(abs(k_all - v), 4))
+    sxx = sum(x * x for x in xs)
+    k_c = sum(x * r["S_centers"] for x, r in zip(xs, rows)) / sxx
+    print("centers convention k:", round(k_c, 4))
+    ko, dko, _ = fit(xs, [(r["S_inn"] + r["S_out_obo"]) / 2 for r in rows],
+                     [(r["S_out_obo"] - r["S_inn"]) / 2 for r in rows])
+    print("off-by-one k:", round(ko, 4), round(dko, 4))
+    km_all, dkm_mc_all, _ = fit(mc_x, mc_y, mc_d)
+    print("MC seed", SEED, ":", round(km_all, 4), round(dkm_mc_all, 4), "ratio dk/dk_mc", round(dk_all / dkm_mc_all, 2))
+    runs = [fit(*monte_carlo(radii, s))[0] for s in range(1, 201)]
     mean = sum(runs) / len(runs)
     sd = math.sqrt(sum((v - mean) ** 2 for v in runs) / (len(runs) - 1))
     print("MC 200 seeds: mean", round(mean, 4), "sd", round(sd, 4), "min", round(min(runs), 4), "max", round(max(runs), 4))
-    worst = max(abs(lattice_points(R) + 1 - math.pi * R * R) / math.sqrt(R) for R in range(1, 1501))
-    negative = sum(1 for R in range(1, 1501) if lattice_points(R) + 1 < math.pi * R * R)
-    print("R<=1500: max|dev|/sqrt(R)", round(worst, 2), "negative", negative, "of 1500")
 
-    figure_pixels(out)
-    figure_model(out)
+    rng = random.Random(1)
+    big = [round(rng.uniform(R_MIN, R_MAX) * Q) for _ in range(5000)]
+    worst = 0.0
+    for m in big:
+        qi, qo = exact_quarter(m)
+        dev = 2 * (qi + qo) - math.pi * (m / Q) ** 2
+        worst = max(worst, abs(dev) / (2 * (qo - qi)))
+    print("5000 random radii: max |dev|/dS", round(worst, 3))
+
+    for R in (100, 1000):
+        m = Q * R
+        res = {}
+        for v in ("correct", "open", "offbyone"):
+            si, so = program_quarter(m, v) if R == 100 else exact_quarter(m)
+            res[v] = round(2 * (si + so) / R ** 2, 5)
+        print("R =", R, res)
+
+    figure_pixels(out, [(CONTROL[0], "а"), (CONTROL[1], "б"), (50, "в")])
     figure_results(out, rows, k_all, cum_pix, cum_mc)
 
 
